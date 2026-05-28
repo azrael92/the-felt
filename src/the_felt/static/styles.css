@@ -2317,15 +2317,29 @@ html.in-iframe .topbar { display: none !important; }
 html.in-iframe body { overflow: hidden; }
 html.in-iframe main {
   height: 100vh !important;
-  grid-template-columns: minmax(0, 1fr) 260px !important;
+  /* 320px sidebar: narrow enough to leave the table room, wide enough to read */
+  grid-template-columns: minmax(0, 1fr) 320px !important;
 }
+html.in-iframe .table-zone { padding: 8px 16px 6px !important; }
 html.in-iframe .side-panel {
-  padding: 8px 8px 8px 4px !important;
-  max-height: 100vh !important;
+  /* fill the full column height; children flex-share it */
+  height: 100%;
+  padding: 8px 10px 6px 4px !important;
+  overflow: hidden !important;
+  gap: 6px !important;
 }
-html.in-iframe .tabs-card { display: none; }
+/* Coach card: auto-size to its content, capped so it can't crowd out tabs */
 html.in-iframe .coach-card {
-  max-height: calc(100vh - 24px) !important;
-  flex: 1;
+  flex: 0 1 auto !important;
+  max-height: 44vh !important;
+  overflow-y: auto;
 }
-html.in-iframe .table-zone { padding: 6px 10px 4px !important; }
+/* Tabs card: take all remaining space, scroll internally */
+html.in-iframe .tabs-card {
+  flex: 1 1 0 !important;
+  min-height: 0 !important;
+  display: flex !important;
+  flex-direction: column !important;
+}
+/* Tier (Coach depth) card: fixed at bottom */
+html.in-iframe .tier-card { flex: 0 0 auto; padding: 6px 10px !important; }
