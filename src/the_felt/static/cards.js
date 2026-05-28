@@ -118,16 +118,16 @@ function chipStack(cx, cy, amount) {
 // SVG defs (gradients used across the table).
 function defs() {
   const d = svgEl('defs');
-  // Felt radial gradient — darker outer, brighter center
+  // Felt radial gradient — warm dark, subdued center
   const fg = svgEl('radialGradient', { id: 'felt-gradient', cx: '50%', cy: '50%', r: '55%' });
-  fg.appendChild(svgEl('stop', { offset: '0%', 'stop-color': '#1a684a' }));
-  fg.appendChild(svgEl('stop', { offset: '60%', 'stop-color': '#0f4a32' }));
-  fg.appendChild(svgEl('stop', { offset: '100%', 'stop-color': '#082a1a' }));
+  fg.appendChild(svgEl('stop', { offset: '0%', 'stop-color': '#132b1e' }));
+  fg.appendChild(svgEl('stop', { offset: '60%', 'stop-color': '#0c1f14' }));
+  fg.appendChild(svgEl('stop', { offset: '100%', 'stop-color': '#070f09' }));
   d.appendChild(fg);
-  // Card back gradient
-  const cbg = svgEl('linearGradient', { id: 'card-back-gradient', x1: '0%', y1: '0%', x2: '0%', y2: '100%' });
-  cbg.appendChild(svgEl('stop', { offset: '0%', 'stop-color': '#a83838' }));
-  cbg.appendChild(svgEl('stop', { offset: '100%', 'stop-color': '#7a1e1e' }));
+  // Card back gradient — dark amethyst
+  const cbg = svgEl('linearGradient', { id: 'card-back-gradient', x1: '0%', y1: '0%', x2: '100%', y2: '100%' });
+  cbg.appendChild(svgEl('stop', { offset: '0%', 'stop-color': '#3a2860' }));
+  cbg.appendChild(svgEl('stop', { offset: '100%', 'stop-color': '#1a1030' }));
   d.appendChild(cbg);
   return d;
 }

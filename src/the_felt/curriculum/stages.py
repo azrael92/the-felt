@@ -233,6 +233,16 @@ _WT_STAGE3 = (
               "Equity ≥ pot odds → call. Equity < pot odds → fold. That's the entire 'should I call' "
               "math reduced to one comparison."),
     ),
+    WalkthroughStep(
+        title="Pot odds also tell you when to bluff",
+        body=("Pot odds work in both directions. When you <em>bet</em> or <em>raise</em>, you're "
+              "offering <em>your opponent</em> a price. If you bet enough that their pot odds are "
+              "worse than their equity, they must fold to show a profit — even with a decent hand. "
+              "This is the math behind bluffing: size your bet so their required equity exceeds "
+              "what they actually have. <strong>Min-defense frequency (MDF)</strong> = the fraction "
+              "of the time your opponent must call to prevent you from auto-profiting."),
+        formula="MDF = pot ÷ (pot + bet)",
+    ),
 )
 
 _WT_STAGE4 = (
@@ -256,6 +266,17 @@ _WT_STAGE4 = (
               "The right play is whichever action has the highest EV. We pre-compute these "
               "for you; you'll learn to pick the max."),
     ),
+    WalkthroughStep(
+        title="EV of a bluff",
+        body=("A bluff has <em>fold equity</em> — value that comes purely from your opponent "
+              "folding, not from winning at showdown. "
+              "EV(bluff) = (fold % × pot) − (call % × bet_size). "
+              "A bluff is profitable when your opponent folds often enough. "
+              "Against a tight player who folds 60% of the time to a half-pot bet: "
+              "EV = 0.60 × 60 − 0.40 × 30 = 36 − 12 = <strong>+24 chips</strong> "
+              "— pure profit from pressure, with <em>zero</em> reliance on your cards."),
+        formula="EV(bluff) = fold% × pot − call% × bet",
+    ),
 )
 
 _WT_STAGE5 = (
@@ -271,6 +292,18 @@ _WT_STAGE5 = (
               "realize more of your equity.<br>"
               "<strong>OOP</strong> (out of position): you act first → defend tighter; you'll be "
               "guessing what they have on every street."),
+    ),
+    WalkthroughStep(
+        title="Position makes bluffs cheaper",
+        body=("When you're <strong>in position</strong>, your bluffs work for two reasons: "
+              "(1) you can make a smaller bet because your opponent acts into you — any check "
+              "signals weakness and you can attack it. "
+              "(2) you see their action first, so you can give up cheaply when they "
+              "show resistance. <br><br>"
+              "Out of position, bluffs require larger sizing because you must bet blind into "
+              "possible traps. The same bluff that costs 30 chips in position might cost 50 "
+              "out of position to have the same fold equity. <strong>Position is a bluffing "
+              "discount.</strong>"),
     ),
 )
 
@@ -328,16 +361,19 @@ STAGES: tuple[TrainingStage, ...] = (
         id=3, title="Compute pot odds", teaches="pot odds + should-I-call",
         questions=(_STAGE_QUESTIONS["pot_odds"], _STAGE_QUESTIONS["should_call"]),
         handled_for_you=("equity", "EV", "position", "range", "archetype", "exploit"),
-        intro=("Now you compute the price to call yourself. We still tell you your "
-               "equity — your job is to compare and decide."),
+        intro=("New axis: pot odds. You compute the price to call; we still give you "
+               "your equity. Compare the two and decide. "
+               "Bonus: the last walkthrough slide shows how these same numbers "
+               "determine when a <em>bluff</em> is profitable."),
         walkthrough=_WT_STAGE3,
     ),
     TrainingStage(
         id=4, title="EV in chips", teaches="expected value",
         questions=(_STAGE_QUESTIONS["ev_call"], _STAGE_QUESTIONS["best_action"]),
         handled_for_you=("position", "range", "archetype", "exploit"),
-        intro=("Stop thinking in percentages — think in chips. EV per decision is what "
-               "actually compounds over thousands of hands."),
+        intro=("Think in chips, not percentages. EV is the long-run average result of "
+               "each action — including bluffs, which have EV from fold equity alone. "
+               "The last walkthrough slide works through a bluff's EV calculation."),
         walkthrough=_WT_STAGE4,
     ),
     TrainingStage(
@@ -431,13 +467,17 @@ class StageState:
         return 1.0
 
     def ready_to_graduate(self) -> bool:
-        """True when the user has earned the option to advance."""
-        # Need at least 10 quizzes attempted, current accuracy is high,
-        # and we're at low frequency (= they're consistent enough to be on cruise).
+        """True when the user has earned the option to advance.
+
+        Graduation requires consistency, not perfection. After 8 quizzes with
+        3+ clean hands at a relaxed cadence the user clearly has the concept.
+        Lowering the bar from (10 quizzes, 5 hands) means less grind on early
+        stages where the concept is simple (stage 1 hand reading, stage 2 outs).
+        """
         return (
-            self.quiz_count >= 10
-            and self.clean_hands >= 5
-            and self.frequency() <= 0.33
+            self.quiz_count >= 8
+            and self.clean_hands >= 3
+            and self.frequency() <= 0.66   # relax: any improvement unlocks grad option
         )
 
 
@@ -745,25 +785,41 @@ def _render_question(sq: StageQuestion, ctx: dict[str, Any]) -> dict[str, Any]:
 
 
 def _handled_summary(stage: TrainingStage, ctx: dict[str, Any]) -> dict[str, str]:
-    """Friendly preview of what the app is computing FOR the user this stage."""
+    """Educational preview of what the app is handling — explains *why*, not just the number."""
     out: dict[str, str] = {}
     if "equity" in stage.handled_for_you:
-        out["Equity"] = f"{ctx.get('equity_pct', 0):.0f}% to win"
+        eq = ctx.get("equity_pct", 0)
+        out["Win chance"] = (
+            f"{eq:.0f}% — Monte Carlo vs estimated opponent range"
+        )
     if "EV" in stage.handled_for_you:
         ev_labels = ctx.get("ev_labels_ranked") or []
         if ev_labels:
-            out["EV per action"] = " · ".join(ev_labels[:3])
+            out["Best EV action"] = ev_labels[0]
+            if len(ev_labels) > 1:
+                out["Other EVs"] = " · ".join(ev_labels[1:3])
+        # Hint at bluff EV when relevant
+        spot = ctx.get("spot", "")
+        if spot in ("pure_bluff", "semi_bluff"):
+            fold_eq = ctx.get("fold_equity_pct")
+            if fold_eq is not None:
+                out["Bluff note"] = (
+                    f"Opp folds ~{fold_eq:.0f}% → bluffing has positive EV here"
+                )
     if "position" in stage.handled_for_you:
         pos = ctx.get("hero_position") or "—"
-        ip = "in position" if ctx.get("in_position") else "out of position"
-        out["Position"] = f"{pos} ({ip})"
+        ip = ctx.get("in_position", False)
+        ip_str = "acting last — wider range profitable" if ip else "acting first — tighten up"
+        out["Position"] = f"{pos}: {ip_str}"
     if "range" in stage.handled_for_you:
         rs = ctx.get("villain_range_size") or 0
-        out["Villain range"] = f"~{rs} combos"
+        pct = round(rs / 1326 * 100)
+        out["Villain range"] = f"~{rs} combos (~top {pct}% of hands)"
     if "archetype" in stage.handled_for_you:
-        out["Opponent"] = ctx.get("villain_archetype") or "unknown"
+        arch = ctx.get("villain_archetype") or "unknown"
+        out["Opponent type"] = arch
     if "exploit" in stage.handled_for_you:
-        out["Recommended"] = ctx.get("verdict_label") or "—"
+        out["Recommended play"] = ctx.get("verdict_label") or "—"
     return out
 
 
