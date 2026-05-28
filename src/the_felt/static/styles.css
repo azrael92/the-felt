@@ -2323,7 +2323,25 @@ html.in-iframe .topbar { display: none !important; }
     height: 100vh !important;
     grid-template-columns: minmax(0, 1fr) 320px !important;
   }
-  html.in-iframe .table-zone { padding: 8px 16px 6px !important; }
+  html.in-iframe .table-zone { padding: 4px 12px 4px !important; }
+  /* Compact action bar — keyboard hints useless in embed, big buttons waste height */
+  html.in-iframe .action-bar {
+    margin-top: 6px !important;
+    padding: 8px 12px !important;
+  }
+  html.in-iframe .action-meta {
+    padding-bottom: 6px !important;
+    margin-bottom: 6px !important;
+  }
+  html.in-iframe .action-buttons {
+    gap: 6px !important;
+    margin-bottom: 0 !important;
+  }
+  html.in-iframe .act {
+    min-height: 44px !important;
+    padding: 6px 6px !important;
+  }
+  html.in-iframe .action-hint { display: none !important; }
   html.in-iframe .side-panel {
     height: 100%;
     padding: 8px 10px 6px 4px !important;
