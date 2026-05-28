@@ -1,0 +1,33 @@
+# docker-compose.yml — drop on the R620 alongside the existing OpenClaw stack.
+# Cloudflare Tunnel handles TLS + DNS via the magech tunnel config; this only
+# exposes port 8000 on the loopback to the tunnel.
+
+services:
+  the_felt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: the_felt:latest
+    container_name: the_felt
+    restart: unless-stopped
+    # Bind only to loopback — cloudflared sits on the same host and connects via 127.0.0.1
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - the_felt-data:/data
+    environment:
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      COACH_MODEL: ${COACH_MODEL:-claude-opus-4-6}
+      FLAVOR_MODEL: ${FLAVOR_MODEL:-claude-haiku-4-5-20251001}
+      THE_FELT_DB: /data/the_felt.db
+      # When set, recruiter-mode UI is enabled by default (sandbox-safe defaults).
+      THE_FELT_PUBLIC_DEMO: "1"
+    labels:
+      # Optional Traefik label parity with the rest of the homelab — comment out
+      # if you don't use Traefik anywhere.
+      - "homepage.group=Demos"
+      - "homepage.name=The Felt"
+      - "homepage.description=Poker probability trainer (pilot-style)"
+
+volumes:
+  the_felt-data:

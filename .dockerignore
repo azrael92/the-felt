@@ -1,0 +1,21 @@
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.git/
+.gitignore
+.env
+.env.local
+data/
+*.db
+*.db-*
+node_modules/
+.DS_Store
+.coverage
+htmlcov/
+tools/        # novice playtest is local-only
+tests/        # tests don't ship in the image
+docs/
+*.md
+!README.md

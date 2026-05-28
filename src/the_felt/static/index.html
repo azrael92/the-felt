@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>The Felt — Hold'em probability trainer</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;600&display=swap" />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <!-- Public-demo banner: only shown when the server has THE_FELT_PUBLIC_DEMO=1.
+       Tells visitors this is an ephemeral session + offers a stage scrubber. -->
+  <div class="demo-banner" id="demo-banner" hidden>
+    <div class="demo-banner-inner">
+      <span class="demo-badge">DEMO</span>
+      <span class="demo-text">
+        Ephemeral session — your progress won't persist. Each visit starts a fresh trainee.
+      </span>
+      <span class="demo-scrubber">
+        <span class="demo-scrubber-label">Jump to stage:</span>
+        <button data-stage="1">1</button>
+        <button data-stage="2">2</button>
+        <button data-stage="3">3</button>
+        <button data-stage="4">4</button>
+        <button data-stage="5">5</button>
+        <button data-stage="6">6</button>
+        <button data-stage="7">7</button>
+        <button data-stage="8">8</button>
+      </span>
+    </div>
+  </div>
+
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo">♠</span>
+      <span class="name">The Felt</span>
+    </div>
+    <div class="stage-hud" id="stage-hud">
+      <div class="stage-axes" id="stage-axes" title="Each axis lights up when you've graduated past it">
+        <div class="axis" data-axis="1" title="Hand reading"></div>
+        <div class="axis" data-axis="2" title="Outs counting"></div>
+        <div class="axis" data-axis="3" title="Pot odds"></div>
+        <div class="axis" data-axis="4" title="EV"></div>
+        <div class="axis" data-axis="5" title="Position"></div>
+        <div class="axis" data-axis="6" title="Ranges"></div>
+        <div class="axis" data-axis="7" title="Archetypes"></div>
+        <div class="axis" data-axis="8" title="Exploits"></div>
+      </div>
+      <div class="stage-label">
+        Stage <span id="stage-id">1</span> · <span id="stage-title">Read your hand</span>
+      </div>
+    </div>
+    <div class="session-strip">
+      <div class="session-stat"><span class="label">hand</span><span class="value" id="hand-counter">—</span></div>
+      <div class="session-stat"><span class="label">won</span><span class="value" id="stat-won">0/0</span></div>
+      <div class="session-stat"><span class="label">net</span><span class="value" id="stat-net">0</span></div>
+      <div class="session-stat"><span class="label">best play</span><span class="value" id="stat-best-play">—</span></div>
+    </div>
+    <div class="streak-chip" id="streak-chip" title="Consecutive good-or-better decisions">
+      <span class="streak-icon">🔥</span>
+      <div class="streak-body">
+        <div class="streak-current"><span id="streak-current">0</span></div>
+        <div class="streak-best">best <span id="streak-best">0</span></div>
+      </div>
+    </div>
+    <div class="skill-block">
+      <div class="skill-ring" id="skill-ring">
+        <svg viewBox="0 0 60 60">
+          <circle cx="30" cy="30" r="26" class="skill-ring-bg"/>
+          <circle cx="30" cy="30" r="26" class="skill-ring-fill" id="skill-ring-fill"/>
+        </svg>
+        <div class="skill-num" id="skill-num">1500</div>
+      </div>
+      <div class="skill-side">
+        <div class="skill-label" id="skill-label">starting out</div>
+        <div class="skill-trend" id="skill-trend"></div>
+      </div>
+    </div>
+    <div class="status-block">
+      <div class="status" id="status">connecting…</div>
+    </div>
+  </header>
+
+  <main>
+    <section class="table-zone">
+      <svg id="table" viewBox="0 0 1000 640" preserveAspectRatio="xMidYMid meet"></svg>
+
+      <div class="action-bar" id="action-bar" hidden>
+        <div class="action-meta">
+          <div class="meta-stat"><span class="label">stack</span><span class="value mono" id="hero-stack">—</span></div>
+          <div class="meta-stat"><span class="label">pot</span><span class="value mono" id="pot">—</span></div>
+          <div class="meta-stat"><span class="label">to call</span><span class="value mono" id="to-call">—</span></div>
+        </div>
+        <div class="action-buttons">
+          <button id="btn-fold" class="act act-fold" data-key="fold">
+            <span class="act-label">Fold</span>
+            <span class="act-amount"></span>
+          </button>
+          <button id="btn-check" class="act act-check" data-key="check">
+            <span class="act-label">Check</span>
+            <span class="act-amount"></span>
+          </button>
+          <button id="btn-call" class="act act-call" data-key="call">
+            <span class="act-label">Call</span>
+            <span class="act-amount" id="btn-call-amt"></span>
+          </button>
+          <button id="btn-bet" class="act act-bet" data-key="bet">
+            <span class="act-label">Bet</span>
+            <span class="act-amount" id="btn-bet-amt"></span>
+          </button>
+          <button id="btn-raise" class="act act-raise" data-key="raise">
+            <span class="act-label">Raise</span>
+            <span class="act-amount" id="btn-raise-amt"></span>
+          </button>
+          <button id="btn-allin" class="act act-allin" data-key="all_in">
+            <span class="act-label">All-in</span>
+            <span class="act-amount" id="btn-allin-amt"></span>
+          </button>
+        </div>
+        <div class="bet-row" id="bet-row" hidden>
+          <button class="bet-cancel" id="bet-cancel" title="Cancel">←</button>
+          <input type="range" id="bet-slider" min="0" max="0" value="0" />
+          <div class="quick-sizes">
+            <button data-frac="0.33">⅓</button>
+            <button data-frac="0.5">½</button>
+            <button data-frac="0.66">⅔</button>
+            <button data-frac="1.0">pot</button>
+            <button data-frac="1.5">1.5×</button>
+          </div>
+          <input type="number" id="bet-amount" min="0" value="0" />
+          <button class="bet-confirm" id="bet-confirm">Confirm</button>
+        </div>
+        <div class="action-hint" id="action-hint">
+          <kbd>F</kbd> fold &nbsp; <kbd>K</kbd> check &nbsp; <kbd>C</kbd> call &nbsp; <kbd>R</kbd> raise &nbsp; <kbd>B</kbd> bet
+        </div>
+      </div>
+    </section>
+
+    <aside class="side-panel">
+      <div class="coach-card" id="coach-card">
+        <div class="coach-header">
+          <div class="coach-title">Coach</div>
+          <label class="study-toggle">
+            <input type="checkbox" id="study-mode-toggle" />
+            <span>Study mode</span>
+          </label>
+        </div>
+        <div class="coach-empty" id="coach-empty">Waiting for your turn…</div>
+        <div class="post-action-feedback" id="post-action-feedback" hidden></div>
+        <div class="concept-focus" id="concept-focus" hidden></div>
+        <div class="coach-content" id="coach-content" hidden>
+          <div class="spot-chip" id="spot-chip"></div>
+          <div class="coach-verdict" id="coach-verdict"></div>
+          <div class="coach-why" id="coach-why"></div>
+          <div class="coach-villain" id="coach-villain"></div>
+          <button class="show-math" id="show-math-btn">Show the math ▾</button>
+          <div class="math-drawer" id="math-drawer" hidden>
+            <div class="derivation-intro" id="derivation-intro">Step-by-step derivation of every number above. In study mode each step is hidden until you reveal it.</div>
+            <ol class="derivation-steps" id="derivation-steps"></ol>
+            <details class="raw-stats">
+              <summary>Raw stats</summary>
+              <div class="math-row">
+                <span class="math-label" id="equity-label">Win chance</span>
+                <div class="math-bar"><div class="fill equity-fill" id="equity-bar"></div></div>
+                <span class="math-num mono" id="equity-num">—</span>
+              </div>
+              <div class="math-row">
+                <span class="math-label" id="odds-label">Win % needed</span>
+                <div class="math-bar"><div class="fill odds-fill" id="odds-bar"></div></div>
+                <span class="math-num mono" id="odds-num">—</span>
+              </div>
+              <div class="math-grid" id="math-advanced" hidden>
+                <div><span class="label">Edge</span><span class="value mono" id="edge-num">—</span></div>
+                <div><span class="label">MDF</span><span class="value mono" id="mdf-num">—</span></div>
+                <div><span class="label">α</span><span class="value mono" id="alpha-num">—</span></div>
+                <div><span class="label">Outs</span><span class="value mono" id="outs-num">—</span></div>
+                <div><span class="label">Next</span><span class="value mono" id="nextc-num">—</span></div>
+                <div><span class="label">By river</span><span class="value mono" id="byriver-num">—</span></div>
+              </div>
+              <div class="ev-list-wrap">
+                <div class="ev-header">EV by action</div>
+                <ul id="ev-list"></ul>
+              </div>
+              <ul class="tier-notes" id="tier-notes"></ul>
+            </details>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-card tabs-card">
+        <div class="tabs">
+          <button class="tab active" data-tab="drills">Drills</button>
+          <button class="tab" data-tab="stream">Hand stream</button>
+          <button class="tab" data-tab="leak">Leak report</button>
+          <button class="tab" data-tab="chat">Ask coach</button>
+        </div>
+        <div class="tab-body">
+          <div class="tab-pane active" data-pane="drills">
+            <div class="drills-recommendation" id="drills-recommendation" hidden></div>
+            <div class="drills-list" id="drills-list">
+              <div class="muted" style="padding:8px">Loading lessons…</div>
+            </div>
+            <div class="drill-modal" id="drill-modal" hidden>
+              <div class="drill-header">
+                <div class="drill-lesson-title" id="drill-lesson-title"></div>
+                <button class="drill-close" id="drill-close" title="Close">×</button>
+              </div>
+              <div class="drill-question" id="drill-question"></div>
+              <div class="drill-context" id="drill-context"></div>
+              <div class="drill-choices" id="drill-choices"></div>
+              <input type="number" class="drill-numeric" id="drill-numeric" hidden placeholder="Your answer (number)" />
+              <button class="drill-submit" id="drill-submit" hidden>Submit</button>
+              <div class="drill-feedback" id="drill-feedback" hidden></div>
+              <button class="drill-next" id="drill-next" hidden>Next drill →</button>
+            </div>
+          </div>
+          <div class="tab-pane" data-pane="stream">
+            <ul class="stream" id="action-log"></ul>
+          </div>
+          <div class="tab-pane" data-pane="leak">
+            <div class="leak-block muted" id="leak-block">Play a few hands and we'll spot patterns.</div>
+          </div>
+          <div class="tab-pane" data-pane="chat">
+            <div class="chat-log" id="qa-log"></div>
+            <div class="chat-suggestions" id="qa-suggestions">
+              <button class="qa-suggest" data-q="Why is that the best play?">Why is that the best play?</button>
+              <button class="qa-suggest" data-q="What happens if I fold instead?">What if I fold instead?</button>
+              <button class="qa-suggest" data-q="What hands beat me here?">What hands beat me?</button>
+            </div>
+            <div class="qa-form">
+              <input type="text" id="qa-input" placeholder="Ask anything about this hand…" />
+              <button id="qa-send">Ask</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel-card tier-card">
+        <div class="tier-row">
+          <span class="tier-label">Coach depth</span>
+          <select id="tier-select">
+            <option value="auto">auto</option>
+            <option value="1">1 · plain English</option>
+            <option value="2">2 · poker terms</option>
+            <option value="3">3 · GTO concepts</option>
+            <option value="4">4 · exploit play</option>
+          </select>
+        </div>
+      </div>
+    </aside>
+  </main>
+
+  <!-- Per-turn quiz modal — gates action buttons until answers submitted -->
+  <div class="quiz-overlay" id="quiz-overlay" hidden>
+    <div class="quiz-modal">
+      <div class="quiz-header">
+        <div class="quiz-stage">
+          <div class="quiz-stage-id">Stage <span id="quiz-stage-id">1</span></div>
+          <div class="quiz-stage-title" id="quiz-stage-title">Read your hand</div>
+        </div>
+        <div class="quiz-stage-teaches" id="quiz-stage-teaches">hand classes</div>
+        <button class="quiz-close" id="quiz-close" title="Skip (counts as wrong)">×</button>
+      </div>
+      <!-- Scrollable middle: situation card + questions + "we're handling these for you"
+           panel. Header above and footer below stay fixed so the Submit button is
+           always visible regardless of how tall the content grows. -->
+      <div class="quiz-body">
+        <div class="quiz-situation" id="quiz-situation"></div>
+        <div class="quiz-questions" id="quiz-questions"></div>
+        <div class="quiz-handled" id="quiz-handled" hidden></div>
+      </div>
+      <div class="quiz-footer">
+        <div class="quiz-meta">
+          <span class="streak-mini" id="quiz-streak-mini">🔥 streak: <span id="quiz-streak-num">0</span></span>
+          <span class="freq-mini" id="quiz-freq-mini">quiz: every turn</span>
+        </div>
+        <button class="quiz-submit" id="quiz-submit">Submit & act</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Stage-up prompt: appears between hands when ready_to_graduate -->
+  <div class="stage-up-overlay" id="stage-up-overlay" hidden>
+    <div class="stage-up-modal">
+      <div class="stage-up-icon">🚁</div>
+      <div class="stage-up-title">Ready for the next axis?</div>
+      <div class="stage-up-body" id="stage-up-body">
+        Your last 5 hands were clean and your streak is high.
+        Want to unlock the next control?
+      </div>
+      <div class="stage-up-actions">
+        <button class="stage-up-stay" id="stage-up-stay">Stay on this stage</button>
+        <button class="stage-up-go" id="stage-up-go">Graduate →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pre-stage walkthrough: appears the first time the user enters a stage.
+       Multi-step lesson teaching the concept BEFORE the user is quizzed. -->
+  <div class="walkthrough-overlay" id="walkthrough-overlay" hidden>
+    <div class="walkthrough-modal">
+      <div class="walkthrough-header">
+        <div class="walkthrough-stage" id="walkthrough-stage">Stage 2 · Counting outs</div>
+        <div class="walkthrough-progress" id="walkthrough-progress">Step 1 of 5</div>
+      </div>
+      <div class="walkthrough-body" id="walkthrough-body"></div>
+      <div class="walkthrough-actions">
+        <button class="walkthrough-back" id="walkthrough-back" hidden>← Back</button>
+        <button class="walkthrough-skip" id="walkthrough-skip">Skip walkthrough</button>
+        <button class="walkthrough-next" id="walkthrough-next">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- First-visit onboarding tour -->
+  <div class="tour-overlay" id="tour-overlay" hidden>
+    <div class="tour-modal" id="tour-modal">
+      <div class="tour-step" id="tour-step"></div>
+      <div class="tour-actions">
+        <button class="tour-skip" id="tour-skip">Skip tour</button>
+        <button class="tour-next" id="tour-next">Next →</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="recap-overlay" id="recap-overlay" hidden>
+    <div class="recap-modal">
+      <div class="recap-header">
+        <div class="recap-title" id="recap-title">Hand complete</div>
+        <div class="recap-subtitle" id="recap-subtitle"></div>
+      </div>
+      <div class="recap-board" id="recap-board"></div>
+      <div class="recap-showdown" id="recap-showdown"></div>
+      <div class="recap-callouts" id="recap-callouts"></div>
+      <button class="recap-next" id="btn-next-hand">Next hand →</button>
+    </div>
+  </div>
+
+  <script src="/cards.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
