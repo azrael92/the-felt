@@ -1,0 +1,14 @@
+/*
+  X-Frame-Options: ALLOWALL
+  X-Content-Type-Options: nosniff
+
+/*.js
+  Content-Type: application/javascript; charset=utf-8
+  Cache-Control: public, max-age=3600
+
+/*.css
+  Content-Type: text/css; charset=utf-8
+  Cache-Control: public, max-age=3600
+
+/
+  Cache-Control: no-cache
