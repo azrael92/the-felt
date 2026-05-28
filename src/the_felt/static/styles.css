@@ -2306,3 +2306,26 @@ main {
   .topbar { display: none; }
   main { height: 100vh; }
 }
+
+/* =============================================================
+   IFRAME EMBED MODE
+   When running inside magech.ai or any other iframe, force
+   two-column layout regardless of the host viewport width.
+   JS (engine-ws.js) adds the 'in-iframe' class to <html>.
+   ============================================================= */
+html.in-iframe .topbar { display: none !important; }
+html.in-iframe body { overflow: hidden; }
+html.in-iframe main {
+  height: 100vh !important;
+  grid-template-columns: minmax(0, 1fr) 260px !important;
+}
+html.in-iframe .side-panel {
+  padding: 8px 8px 8px 4px !important;
+  max-height: 100vh !important;
+}
+html.in-iframe .tabs-card { display: none; }
+html.in-iframe .coach-card {
+  max-height: calc(100vh - 24px) !important;
+  flex: 1;
+}
+html.in-iframe .table-zone { padding: 6px 10px 4px !important; }

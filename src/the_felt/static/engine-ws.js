@@ -23,6 +23,21 @@
 'use strict';
 
 // ─────────────────────────────────────────────────────────────────────────────
+// 0. IFRAME DETECTION — force two-column layout when embedded
+// ─────────────────────────────────────────────────────────────────────────────
+
+(function detectEmbed() {
+  try {
+    if (window.self !== window.top) {
+      document.documentElement.classList.add('in-iframe');
+    }
+  } catch (e) {
+    // cross-origin parent: must be in an iframe
+    document.documentElement.classList.add('in-iframe');
+  }
+})();
+
+// ─────────────────────────────────────────────────────────────────────────────
 // 1. FETCH MONKEY-PATCH
 // ─────────────────────────────────────────────────────────────────────────────
 
