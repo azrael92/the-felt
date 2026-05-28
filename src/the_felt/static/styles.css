@@ -2283,3 +2283,26 @@ main {
   .topbar { grid-template-columns: 1fr; gap: 12px; padding: 12px; }
   .session-strip { gap: 14px; }
 }
+
+/* Compact mode for iframe embeds and smaller viewports */
+@media (max-height: 800px) {
+  .topbar {
+    padding: 6px 16px;
+    gap: 10px;
+  }
+  .stage-hud { padding: 3px 8px; }
+  .stage-axes { display: none; }
+  .skill-block { gap: 6px; }
+  .skill-ring { width: 40px; height: 40px; }
+  .skill-ring svg { width: 40px; height: 40px; }
+  .streak-chip { padding: 4px 8px; }
+  main { height: calc(100vh - 52px); }
+  .table-zone { padding: 8px 12px 6px; }
+  #table { max-width: 900px; }
+  .coach-card { max-height: 60vh; }
+}
+
+@media (max-height: 600px) {
+  .topbar { display: none; }
+  main { height: 100vh; }
+}
