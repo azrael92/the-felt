@@ -51,7 +51,7 @@
   }
   window.fetch = async function(url, opts) {
     if (typeof url === 'string') {
-      if (url.includes('/api/lessons'))       return jsonResponse({ modules: [] });
+      if (url.includes('/api/lessons'))       return jsonResponse({ modules: LESSON_CATALOG });
       if (url.includes('/api/users/'))        return jsonResponse({ progress: {} });
       if (url.includes('/api/stages'))        return jsonResponse({ stages: [] });
       if (url.includes('/api/config'))        return jsonResponse({});
@@ -252,27 +252,22 @@ function describeScore(score) {
  * @returns {number} equity 0-1
  */
 function calcEquity(holeCards, board, numOpponents, iters = 400) {
-  if (board.length >= 5) {
-    // Board complete — exact equity
-    const heroScore = bestHand7(holeCards, board);
-    // We don't know opponent cards here, return 0.5 as default
-    return 0.5;
-  }
   const known = new Set([...holeCards, ...board]);
   const remaining = buildDeck().filter(c => !known.has(c));
+  const needed = Math.max(0, 5 - board.length); // 0 on river
 
   let wins = 0, ties = 0;
-  const needed = 5 - board.length;
 
   for (let i = 0; i < iters; i++) {
-    // Partial Fisher-Yates to pick cards we need
+    // Partial Fisher-Yates — deal community runout + opponent hole cards
     const deck = [...remaining];
     const totalNeeded = needed + numOpponents * 2;
     for (let j = 0; j < totalNeeded; j++) {
       const r = j + Math.floor(Math.random() * (deck.length - j));
       [deck[j], deck[r]] = [deck[r], deck[j]];
     }
-    const simBoard = [...board, ...deck.slice(0, needed)];
+    // On river (needed=0) simBoard == board
+    const simBoard = needed > 0 ? [...board, ...deck.slice(0, needed)] : board;
     const heroScore = bestHand7(holeCards, simBoard);
     let heroWins = true, heroTie = false;
     for (let p = 0; p < numOpponents; p++) {
@@ -328,13 +323,10 @@ function estimateOuts(holeCards, board) {
       if (missing.length === 1) gutshot = true;
     }
   }
-  if (!flushDraw) { // avoid double-counting OESD+flush draw
-    if (oesd) outs += 8;
-    else if (gutshot) outs += 4;
-  } else {
-    if (oesd) outs += 8;
-    else if (gutshot) outs += 4;
-  }
+  // Straight outs: when also holding a flush draw, ~2 straight cards share the flush suit
+  const straightOverlap = flushDraw ? 2 : 0;
+  if (oesd) outs += Math.max(0, 8 - straightOverlap);
+  else if (gutshot) outs += Math.max(0, 4 - straightOverlap);
 
   // Overcards to board (2 overcards = ~6 outs)
   if (board.length >= 3) {
@@ -354,54 +346,83 @@ function estimateOuts(holeCards, board) {
 
 /**
  * Compute full coach tip payload.
+ *
+ * EV model: pure pot-equity math, no fake fold-frequency credits.
+ * Verdict thresholds:
+ *   Fold   — equity < alpha (not getting pot odds)
+ *   Call   — alpha <= equity < alpha + 0.18 (getting odds but no strong edge)
+ *   Raise  — equity >= alpha + 0.18 (clear equity advantage worth building the pot)
+ *   Bet    — no call amount and equity >= 0.54 (slight favourite, bet for value)
+ *   Check  — no call amount and equity < 0.54 (marginal, don't inflate pot)
  */
 function computeCoach(holeCards, board, pot, callAmount, heroStack, numOpponents, userAction, handId, seq) {
   const equity = calcEquity(holeCards, board, numOpponents, 400);
+
+  // alpha = equity needed to break even on a call
   const alpha = callAmount > 0 ? callAmount / (pot + callAmount) : 0;
-  const mdf = 1 - alpha;
-  const edge = equity - alpha;
-  const outs = estimateOuts(holeCards, board);
-  const cardsLeft47 = Math.max(47 - board.length * 2, 1); // rough
-  const next_card_pct = outs / 47;
-  const by_river_pct = board.length === 3 ? 1 - Math.pow(1 - outs / 47, 2) :
-                       board.length === 4 ? outs / 46 : 0;
+  const mdf   = 1 - alpha;
+  const edge  = equity - alpha;
+  const outs  = estimateOuts(holeCards, board);
 
-  // EV calculations
+  // Outs-based river chance estimates
+  const next_card_pct = board.length < 5 ? outs / Math.max(1, 48 - board.length) : 0;
+  const by_river_pct  = board.length === 3 ? 1 - Math.pow(1 - outs / 47, 2)
+                      : board.length === 4 ? outs / 46
+                      : 0;
+
+  // EV of each action — no fake fold equity, just equity × pot math
   const ev_fold = 0;
-  const ev_call = callAmount > 0
-    ? equity * (pot + callAmount) - (1 - equity) * callAmount
-    : equity * pot;
-  // Rough raise EV: assume raising 2.5x pot, opponent folds fold_freq
-  const raiseAmt = Math.min(heroStack, pot * 2.5);
-  const oppFoldFreq = 0.45;
-  const ev_raise = oppFoldFreq * pot + (1 - oppFoldFreq) * (equity * (pot + raiseAmt) - (1 - equity) * raiseAmt);
 
-  // Verdict
+  // Call EV: win (pot + callAmount) at equity%, lose callAmount at (1-equity)%
+  const ev_call = callAmount > 0
+    ? +(equity * (pot + callAmount) - (1 - equity) * callAmount).toFixed(2)
+    : +(equity * pot).toFixed(2);
+
+  // Bet/raise EV: use 70% pot sizing, no fold-equity assumption
+  // This is conservative and avoids the "always go all-in" trap
+  const betAmt   = Math.min(heroStack, Math.round(pot * 0.70));
+  const raiseAmt = Math.min(heroStack, Math.max(callAmount * 2.5, Math.round(pot * 0.70)));
+  const ev_bet   = +(equity * (pot + betAmt)   - (1 - equity) * betAmt).toFixed(2);
+  const ev_raise = callAmount > 0
+    ? +(equity * (pot + raiseAmt) - (1 - equity) * raiseAmt).toFixed(2)
+    : ev_bet;
+
+  // ── Verdict ────────────────────────────────────────────────────────────────
   let verdict;
   if (callAmount === 0) {
-    verdict = equity > 0.35 ? 'check' : 'check';
-  } else if (equity >= alpha + 0.05) {
-    verdict = ev_raise > ev_call ? 'raise' : 'call';
-  } else if (equity >= alpha - 0.02) {
-    verdict = 'call';
+    // Betting or checking spot
+    verdict = equity >= 0.54 ? 'bet' : 'check';
   } else {
-    verdict = 'fold';
+    if (equity >= alpha + 0.18) {
+      // Clear equity advantage — raise is best
+      verdict = 'raise';
+    } else if (equity >= alpha) {
+      // Getting pot odds — call
+      verdict = 'call';
+    } else {
+      // Not getting the price — fold
+      verdict = 'fold';
+    }
   }
 
-  const verdictMap = { fold: 'Fold', check: 'Check', call: 'Call', raise: 'Raise' };
+  const verdictMap = { fold: 'Fold', check: 'Check', call: 'Call', bet: 'Bet', raise: 'Raise' };
 
-  // Notes
+  // Coaching notes
   const notes = [];
   if (outs > 0) notes.push(`${outs} outs to improve`);
-  if (equity > 0.6) notes.push('Strong equity vs range');
-  else if (equity < 0.3) notes.push('Behind range – proceed cautiously');
-  if (edge > 0.1) notes.push('Profitable call / bet spot');
-  if (edge < -0.1) notes.push('Folding preserves EV');
-  if (mdf < 0.4) notes.push(`Low MDF: you only need to defend ${(mdf * 100).toFixed(0)}% of range`);
+  if (equity >= 0.65)       notes.push('Strong equity — lean toward building the pot');
+  else if (equity <= 0.28)  notes.push('Well behind — only continue with a clear reason');
+  if (callAmount > 0) {
+    if (edge > 0.12)        notes.push(`${(edge * 100).toFixed(0)}pp above pot odds — comfortable call or raise`);
+    else if (edge < -0.08)  notes.push(`${(Math.abs(edge) * 100).toFixed(0)}pp below pot odds — folding saves chips`);
+    else                    notes.push('Roughly at pot odds — marginal call, close decision');
+  }
+  if (board.length >= 3 && outs >= 9) notes.push('Flush draw: ~35% to hit by river');
+  if (board.length === 3 && outs >= 8 && outs < 9) notes.push('Open-ended straight draw: ~32% to hit by river');
 
   const spot = board.length === 0 ? 'preflop' :
-               board.length === 3 ? 'flop' :
-               board.length === 4 ? 'turn' : 'river';
+               board.length === 3 ? 'flop'    :
+               board.length === 4 ? 'turn'    : 'river';
 
   return {
     hand_id: handId,
@@ -410,19 +431,31 @@ function computeCoach(holeCards, board, pot, callAmount, heroStack, numOpponents
     to_call: callAmount,
     spot,
     math: {
-      equity: +equity.toFixed(3),
+      equity:            +equity.toFixed(3),
       pot_odds_required: +alpha.toFixed(3),
-      edge: +edge.toFixed(3),
-      mdf: +mdf.toFixed(3),
-      alpha: +alpha.toFixed(3),
+      edge:              +edge.toFixed(3),
+      mdf:               +mdf.toFixed(3),
+      alpha:             +alpha.toFixed(3),
       outs,
-      next_card_pct: +next_card_pct.toFixed(3),
-      by_river_pct: +by_river_pct.toFixed(3),
-      ev_by_action: { fold: 0, call: +ev_call.toFixed(2), raise: +ev_raise.toFixed(2) },
-      ev_labels: { fold: 'Fold', call: callAmount > 0 ? 'Call' : 'Check', raise: 'Raise' },
+      next_card_pct:     +next_card_pct.toFixed(3),
+      by_river_pct:      +by_river_pct.toFixed(3),
+      ev_by_action: {
+        fold:  0,
+        call:  callAmount > 0 ? ev_call : ev_fold,
+        check: callAmount === 0 ? ev_call : ev_fold,
+        bet:   ev_bet,
+        raise: ev_raise,
+      },
+      ev_labels: {
+        fold:  'Fold',
+        call:  callAmount > 0 ? 'Call' : 'Check',
+        check: 'Check',
+        bet:   'Bet',
+        raise: 'Raise',
+      },
       verdict,
-      verdict_label: verdictMap[verdict] || verdict,
-      verdict_button: verdictMap[verdict] || verdict,
+      verdict_label:  verdictMap[verdict] || verdict,
+      verdict_button: verdict,
       notes,
     },
   };
@@ -526,7 +559,326 @@ function estimateHandStrength(holeCards, board, numOpponents) {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 8. SIMPLIFIED GLICKO-2 TRACKER
+// 8. LESSON CATALOG + DRILL ENGINE
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Static lesson catalog.  Each lesson has a pool of question variants; the
+ * drill engine picks one at random on every `start_drill` call.
+ *
+ * Format consumed by app.js:
+ *   catalog  → { modules: [ { id, title, lessons: [ { id, title, drill_kind } ] } ] }
+ *   question → { question, context?, answer_type: 'mc'|'numeric', choices?, correct_index? }
+ *   feedback → { correct, correct_answer, explanation }
+ */
+const LESSON_CATALOG = [
+  {
+    id: 'pot-odds',
+    title: 'Pot Odds',
+    lessons: [
+      { id: 'po-read',    title: 'Reading pot odds',          drill_kind: 'mc' },
+      { id: 'po-call',    title: 'Should I call?',            drill_kind: 'mc' },
+      { id: 'po-rule24',  title: 'Rule of 2 and 4',          drill_kind: 'mc' },
+      { id: 'po-flush',   title: 'Flush draw math',           drill_kind: 'mc' },
+    ],
+  },
+  {
+    id: 'hand-strength',
+    title: 'Hand Strength',
+    lessons: [
+      { id: 'hs-rank',    title: 'Ranking made hands',        drill_kind: 'mc' },
+      { id: 'hs-texture', title: 'Wet vs dry boards',         drill_kind: 'mc' },
+      { id: 'hs-tptk',   title: 'Top pair vs overpair',      drill_kind: 'mc' },
+      { id: 'hs-draws',   title: 'Drawing hands vs made',     drill_kind: 'mc' },
+    ],
+  },
+  {
+    id: 'position',
+    title: 'Position',
+    lessons: [
+      { id: 'pos-basics', title: 'Why position matters',      drill_kind: 'mc' },
+      { id: 'pos-steal',  title: 'Late-position opens',       drill_kind: 'mc' },
+      { id: 'pos-blind',  title: 'Playing from the blinds',   drill_kind: 'mc' },
+    ],
+  },
+  {
+    id: 'bet-sizing',
+    title: 'Bet Sizing',
+    lessons: [
+      { id: 'bs-value',   title: 'Value bet sizing',          drill_kind: 'mc' },
+      { id: 'bs-cbet',    title: 'Continuation betting',      drill_kind: 'mc' },
+      { id: 'bs-bluff',   title: 'Bluff sizing',              drill_kind: 'mc' },
+    ],
+  },
+];
+
+/**
+ * Per-lesson question pools.  Each entry is one drill variant:
+ *   { q, choices, correct, explanation }
+ * `correct` is the 0-based index of the right choice.
+ */
+const DRILL_QUESTIONS = {
+  'po-read': [
+    {
+      q: 'The pot is 60 chips. Your opponent bets 20 chips. What pot odds are you being offered?',
+      choices: ['25%', '20%', '33%', '17%'],
+      correct: 0,
+      explanation: 'You must call 20 into a pot of 80 (60 + 20). 20 ÷ 80 = 25%. You need at least 25% equity to profit.',
+    },
+    {
+      q: 'The pot is 100 chips. Your opponent bets 50 chips. What equity do you need to break even on a call?',
+      choices: ['33%', '25%', '50%', '40%'],
+      correct: 0,
+      explanation: 'Call 50 into pot of 150 (100+50). 50 ÷ 150 = 33%. That\'s your pot odds — the minimum equity needed.',
+    },
+    {
+      q: 'The pot is 40. Opponent bets 40 (pot-sized). What are your pot odds?',
+      choices: ['50%', '33%', '40%', '25%'],
+      correct: 0,
+      explanation: 'Call 40 into 120 (40+40+40). 40 ÷ 120 = 33%… wait — it\'s 40 into 80+40=120: 40/120 = 33%. Actually the call is 40 into the new pot of 40+40+40=120, so 33%. A pot-sized bet always gives the caller 33% pot odds.',
+    },
+    {
+      q: 'Pot is 200. Opponent bets 100 (half-pot). You must call 100. What are your pot odds?',
+      choices: ['25%', '33%', '50%', '20%'],
+      correct: 0,
+      explanation: 'Call 100 into 400 (200+100+100). 100 ÷ 400 = 25%. A half-pot bet gives the caller 25% pot odds.',
+    },
+  ],
+  'po-call': [
+    {
+      q: 'You hold a flush draw (≈35% equity). Pot is 100, opponent bets 50. Should you call?',
+      choices: ['Yes — you have more equity than pot odds require', 'No — you don\'t have enough equity', 'Only if in position', 'Depends on your stack size'],
+      correct: 0,
+      explanation: 'Pot odds require 50÷(150+50) = 25% equity. Your flush draw gives ~35%. You have 10 percentage points of edge — a clear call.',
+    },
+    {
+      q: 'You have top pair (≈55% equity). Pot is 80, opponent bets 80 (pot-size). Your pot odds are 33%. Should you call?',
+      choices: ['Yes — 55% > 33%, you have strong edge', 'No — pot-sized bets mean strength', 'Yes but only to check the turn', 'Fold — top pair is not strong enough'],
+      correct: 0,
+      explanation: '55% equity vs 33% required = 22pp of edge. Call. The opponent\'s bet size doesn\'t change the math; only your equity and the price matter.',
+    },
+    {
+      q: 'You have a gutshot straight draw (≈17% equity). Pot is 120, opponent bets 60. Pot odds: 33%. Should you call?',
+      choices: ['No — 17% < 33%, you don\'t have the price', 'Yes — any draw is worth calling', 'Yes — implied odds make up the gap', 'Check to the turn instead'],
+      correct: 0,
+      explanation: '17% equity doesn\'t cover 33% pot odds. You lose money calling. Implied odds might help, but 16 percentage points is a big gap to overcome with future streets.',
+    },
+  ],
+  'po-rule24': [
+    {
+      q: 'You\'re on the flop with 9 flush outs (two cards to come). Using the Rule of 4, what\'s your rough equity?',
+      choices: ['36%', '18%', '27%', '45%'],
+      correct: 0,
+      explanation: 'Rule of 4: outs × 4 gives a quick equity estimate with two cards to come. 9 × 4 = 36%. (Actual is ~35%, so the rule is accurate.)',
+    },
+    {
+      q: 'You\'re on the TURN with 8 straight outs (one card to come). Using the Rule of 2, what\'s your rough equity?',
+      choices: ['16%', '32%', '8%', '24%'],
+      correct: 0,
+      explanation: 'Rule of 2: outs × 2 on the turn. 8 × 2 = 16%. (Actual is ~17%.) With one card left, use ×2, not ×4.',
+    },
+    {
+      q: 'Why is the Rule of 4 only for the FLOP, not the turn?',
+      choices: ['On the flop you have two cards to come; on the turn only one', 'The deck has fewer cards on the turn', 'Opponents show their hands on the turn', 'Pot sizes differ on each street'],
+      correct: 0,
+      explanation: 'Each out has roughly a 1-in-47 chance per card. Two cards ≈ 2×, so outs × 4 ≈ outs × 2 × 2. On the turn there\'s only one card left, so multiply by 2, not 4.',
+    },
+  ],
+  'po-flush': [
+    {
+      q: 'You hold 9♥ 7♥ on a board of A♥ K♠ 3♥ (flop). How many flush outs do you have?',
+      choices: ['9', '13', '7', '11'],
+      correct: 0,
+      explanation: 'There are 13 hearts total. You hold 2, the board has 2 — that\'s 4 hearts accounted for. 13 − 4 = 9 remaining flush outs.',
+    },
+    {
+      q: 'Pot is 100, opponent bets 50. You have a flush draw (9 outs, ~36% equity on flop). Pot odds are 25%. Is calling correct?',
+      choices: ['Yes — 36% > 25%', 'No — flush draws miss more than they hit', 'Only if the opponent is bluffing', 'No — you need implied odds'],
+      correct: 0,
+      explanation: 'Pure pot odds: 36% equity vs 25% required. You have 11 percentage points of edge. Call immediately without needing implied odds.',
+    },
+  ],
+
+  'hs-rank': [
+    {
+      q: 'Which hand wins: two pair (Aces and Kings) or a set of Jacks?',
+      choices: ['Set of Jacks — three of a kind beats two pair', 'Two pair — Aces and Kings is a premium hand', 'They split the pot', 'Depends on the kicker'],
+      correct: 0,
+      explanation: 'The hand ranking order is: pair < two pair < three of a kind (set) < straight < flush. A set of Jacks beats two pair regardless of which two pair.',
+    },
+    {
+      q: 'Which of these is the strongest hand on a board of Q♠ J♦ T♣ 9♥ 2♠?',
+      choices: ['K-x making a King-high straight', 'Q-Q making top set', 'J-9 making two pair', 'A-K making top pair'],
+      correct: 0,
+      explanation: 'The board runs Q-J-T-9. Any King makes a K-high straight (K-Q-J-T-9), which beats any set or two pair.',
+    },
+  ],
+  'hs-texture': [
+    {
+      q: 'Board: A♠ K♥ 7♦. Is this board "wet" or "dry"?',
+      choices: ['Dry — rainbow, no flush or straight draws', 'Wet — many draws possible', 'Semi-wet — one draw', 'Neutral'],
+      correct: 0,
+      explanation: 'Dry = rainbow suits, no connected ranks. A-K-7 is three different suits with gaps — very few draws connect. Strong made hands are safer here.',
+    },
+    {
+      q: 'Board: 8♣ 7♣ 6♦. Is this board "wet" or "dry"?',
+      choices: ['Wet — flush draw, many straight draws', 'Dry — small cards only', 'Dry — no pair on board', 'Semi-wet'],
+      correct: 0,
+      explanation: 'Two clubs = flush draw. 8-7-6 = OESD for any 5 or 9, gutshots for many others. Many hands connect here. Wet boards favour drawing hands and require larger bets for protection.',
+    },
+    {
+      q: 'Why does board texture affect how much you should bet?',
+      choices: ['Wet boards need larger bets to price out drawing hands', 'Dry boards need larger bets because opponents are stronger', 'Texture doesn\'t affect bet sizing', 'You always bet pot regardless of texture'],
+      correct: 0,
+      explanation: 'On wet boards, your opponent has many outs. A small bet gives them a cheap price. Bet larger to charge draws. On dry boards, a smaller bet still forces a tough decision.',
+    },
+  ],
+  'hs-tptk': [
+    {
+      q: 'You hold A♠ K♣. Board: K♥ 7♦ 2♣. You have top pair top kicker. What hand beats you right now?',
+      choices: ['A set (K-K, 7-7, or 2-2)', 'Any pair of Aces', 'Any King', 'Two overcards'],
+      correct: 0,
+      explanation: 'TPTK (K with A-kicker) loses to K-K (top set), 7-7 (middle set), or 2-2 (bottom set), and also two pair or better. On a dry board like this your TPTK is strong, but be wary when the board pairs.',
+    },
+    {
+      q: 'You hold K♦ Q♠. Board: A♦ K♥ Q♣. You have two pair. What hand beats you?',
+      choices: ['A set of Aces (A-A)', 'Any Ace', 'Any pair', 'Top pair top kicker'],
+      correct: 0,
+      explanation: 'A-A makes a set (three Aces), which beats your two pair. Also K-K or Q-Q would make a set. Two pair is strong but vulnerable to sets when the board is coordinated.',
+    },
+  ],
+  'hs-draws': [
+    {
+      q: 'You have a flush draw on the flop. Your opponent bets. Why might you RAISE instead of just calling?',
+      choices: ['To win the pot immediately if they fold, plus you still have equity if called', 'Because draws should always be played aggressively', 'Because raising disguises your hand', 'You should never raise a draw'],
+      correct: 0,
+      explanation: 'A semi-bluff raise has two ways to win: opponent folds (you win now) or they call and you hit your draw. This makes raises with draws profitable even when called.',
+    },
+    {
+      q: 'You have 15 outs (flush draw + open-ended straight draw). Pot is 80, opponent bets 20. Pot odds ≈ 20%. Should you call?',
+      choices: ['Yes — 15 outs is ~54% equity on flop, far above 20% required', 'No — draws are risky', 'Only call one more street', 'Fold, waiting for a made hand'],
+      correct: 0,
+      explanation: '15 outs × 4 (Rule of 4 on flop) ≈ 60% equity. That demolishes the 20% pot odds. This is actually a re-raise spot — you\'re a favourite to make your hand.',
+    },
+  ],
+
+  'pos-basics': [
+    {
+      q: 'Why is the Button (BTN) considered the best position at the poker table?',
+      choices: ['It acts last on every post-flop street, giving full information before deciding', 'It gets to see two extra cards', 'It pays no blinds', 'It has the largest stack'],
+      correct: 0,
+      explanation: 'Acting last means you see every opponent\'s action before making yours. You gain information on every betting round — check, bet, or raise with full context.',
+    },
+    {
+      q: 'You\'re in the Big Blind and everyone folds to the Button, who raises. The Button is in position. What does that mean for the rest of the hand?',
+      choices: ['They act after you on every post-flop street — they have an information advantage', 'You have the advantage because you get to raise first pre-flop', 'Position doesn\'t matter in heads-up pots', 'The Big Blind always has the positional advantage'],
+      correct: 0,
+      explanation: 'Out of position (OOP), you must act before seeing what the in-position player does. They can check behind (pot control) or bet when you check (exploiting your passivity). Position is a structural advantage that persists for the whole hand.',
+    },
+  ],
+  'pos-steal': [
+    {
+      q: 'You\'re on the Button with 7♦ 4♠. Both blinds have tight, defensive stats. What is the correct play?',
+      choices: ['Raise to steal the blinds — position + fold equity makes this profitable', 'Fold — 7-4 offsuit is too weak to play', 'Call and see the flop cheap', 'Limp in and hope for a good flop'],
+      correct: 0,
+      explanation: 'Against tight blinds, a button raise wins the pot outright often enough to be profitable even with junk. Plus you play in position if called. This is called a "steal."',
+    },
+    {
+      q: 'You open-raise from the Cutoff (one before the Button). The Button calls. You\'re now OUT of position for the rest of the hand. Why?',
+      choices: ['The Button acts after you on every post-flop street', 'You have a weaker hand range', 'The Cutoff always acts first', 'You should have limped instead'],
+      correct: 0,
+      explanation: 'On the flop, turn, and river the Button acts last among the remaining players. From the Cutoff you\'re OOP against the BTN.',
+    },
+  ],
+  'pos-blind': [
+    {
+      q: 'You\'re in the Big Blind and face a Button open-raise. You have a decent hand. Why is calling harder than if you were on the Button?',
+      choices: ['You\'ll be OOP for all post-flop streets — you act first every time', 'The Button always has a better hand', 'You can\'t re-raise from the blinds', 'The blinds are forced bets'],
+      correct: 0,
+      explanation: 'Defending the BB means playing out of position for the entire hand. You need more equity or a very strong hand to compensate for the informational disadvantage.',
+    },
+  ],
+
+  'bs-value': [
+    {
+      q: 'You have top set on the river (a near-nut hand). Pot is 200. What is generally the best approach?',
+      choices: ['Bet large — extract maximum value from worse hands that might call', 'Bet small — don\'t scare them away', 'Check — let them bluff into you', 'Go all-in every time'],
+      correct: 0,
+      explanation: 'With a near-nut hand and a capped opponent range, a large bet extracts more value. Opponents with strong-but-worse hands (two pair, lower sets) are likely to call. Small bets leave money on the table.',
+    },
+    {
+      q: 'You have a medium-strength hand (top pair, weak kicker). The pot is 100 and you want to bet for thin value but also get information. What sizing makes sense?',
+      choices: ['33–50% pot — invites calls from worse, keeps the pot controlled', '100% pot — maximize value', '10% pot — look weak', 'Check and call down'],
+      correct: 0,
+      explanation: 'Thin value bets use smaller sizing: you want weaker hands to call, but you don\'t want to bloat the pot with a marginal holding. 33–50% pot is typical.',
+    },
+  ],
+  'bs-cbet': [
+    {
+      q: 'You raised pre-flop with A♠ K♦ and got one caller. The flop comes J♥ 8♣ 3♦ — a dry, low board that missed you. Should you continuation bet?',
+      choices: ['Yes — you have pre-flop initiative and this board favours your range', 'No — you missed the flop completely', 'Only if your opponent checks first', 'Check and give up'],
+      correct: 0,
+      explanation: 'As the pre-flop raiser you represent a strong range (big pairs, AK, AQ). A dry low board doesn\'t help many calling hands. A small c-bet (30–40% pot) takes the pot frequently against one opponent.',
+    },
+    {
+      q: 'When should you generally SKIP the continuation bet?',
+      choices: ['On wet, connected boards against multiple opponents', 'Whenever you miss the flop', 'When you have position', 'Against tight players only'],
+      correct: 0,
+      explanation: 'Wet boards (flush draws, straight draws) and multiple opponents reduce the success rate of c-bets. Your "fold equity" drops, opponents call or raise more, and you risk building a big pot with a weak hand.',
+    },
+  ],
+  'bs-bluff': [
+    {
+      q: 'You\'re bluffing on the river. Pot is 200. What sizing gives you the best risk-reward ratio?',
+      choices: ['Full pot (200) — forces opponent to need 33% equity to call profitably', 'Half pot — keeps it cheap', 'Over-pot — maximum pressure', 'Any size works equally'],
+      correct: 0,
+      explanation: 'A pot-sized river bluff requires the opponent to be right more than 33% of the time to call. If their calling range is accurate less than 33%, your bluff has positive EV. Larger bets require them to fold more often but also risk more when called.',
+    },
+    {
+      q: 'Which hand is better to bluff with on the river?',
+      choices: ['A busted draw with no showdown value', 'A medium pair that beats some hands', 'Top pair top kicker', 'Two pair'],
+      correct: 0,
+      explanation: 'Bluff with hands that have no showdown value (they lose to any made hand). A busted flush draw can\'t win by checking — bluffing is its only path to winning. Medium pairs should be checked for thin value or a bluff-catch.',
+    },
+  ],
+};
+
+/** State for the in-progress drill (lives in MockWebSocket) */
+let _activeDrill = null;
+
+/**
+ * Called by MockWebSocket when the app sends start_drill.
+ * Returns a drill_question message for the given lesson.
+ */
+function pickDrillQuestion(lessonId) {
+  const pool = DRILL_QUESTIONS[lessonId];
+  if (!pool || !pool.length) return null;
+  const variant = pool[Math.floor(Math.random() * pool.length)];
+  _activeDrill = { lessonId, variant };
+  return {
+    question: variant.q,
+    answer_type: 'mc',
+    choices: variant.choices,
+  };
+}
+
+/**
+ * Called when app sends submit_drill_answer.
+ * Returns drill_feedback.
+ */
+function gradeDrillAnswer(answerIndex) {
+  if (!_activeDrill) return { correct: false, correct_answer: '—', explanation: 'No active drill.' };
+  const { variant } = _activeDrill;
+  const correct = answerIndex === variant.correct;
+  return {
+    correct,
+    correct_answer: variant.choices[variant.correct],
+    explanation: variant.explanation,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. SIMPLIFIED GLICKO-2 TRACKER
 // ─────────────────────────────────────────────────────────────────────────────
 
 class RatingTracker {
@@ -926,10 +1278,32 @@ class FeltEngine {
             stacks[heroSeat], Math.max(1, numOpp), action, handId, this._seq
           );
           this._ws._receive('coach_tip', coachPayload);
+          // Store for Ask-coach Q&A
+          this._ws._lastCoachCtx = {
+            holeCards: heroCards,
+            board: currentBoard2,
+            pot: pot.value,
+            toCall,
+            equity: coachPayload.math.equity,
+            alpha: coachPayload.math.alpha,
+            edge: coachPayload.math.edge,
+            outs: coachPayload.math.outs,
+            verdict: coachPayload.math.verdict,
+            ev_call: coachPayload.math.ev_by_action.call,
+            ev_raise: coachPayload.math.ev_by_action.raise,
+            spot: coachPayload.spot,
+          };
 
           // Rating: pick ev for chosen action vs best
           const math = coachPayload.math;
-          const actionEvMap = { fold: 0, check: 0, call: math.ev_by_action.call, raise: math.ev_by_action.raise, bet: math.ev_by_action.raise };
+          const actionEvMap = {
+            fold:    0,
+            check:   math.ev_by_action.check ?? 0,
+            call:    math.ev_by_action.call  ?? 0,
+            bet:     math.ev_by_action.bet   ?? 0,
+            raise:   math.ev_by_action.raise ?? 0,
+            all_in:  math.ev_by_action.raise ?? 0,
+          };
           const userEv = actionEvMap[action] ?? 0;
           const bestAction = math.verdict;
           const bestEv = actionEvMap[bestAction] ?? 0;
@@ -1128,7 +1502,103 @@ class FeltEngine {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// 10. MOCK WEBSOCKET
+// 10. ASK-COACH RESPONSE GENERATOR
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Generate a plain-English coaching answer based on the question text and the
+ * last known hand context (equity, pot odds, verdict, etc.).
+ *
+ * @param {string} question  - raw question from user
+ * @param {object|null} ctx  - _lastCoachCtx from the MockWebSocket
+ * @returns {string}
+ */
+function generateCoachAnswer(question, ctx) {
+  const q = (question || '').toLowerCase();
+
+  // No hand in progress
+  if (!ctx) {
+    return 'Play a hand first — once you face a decision I\'ll have the math to explain.';
+  }
+
+  const { equity, alpha, edge, outs, verdict, ev_call, ev_raise, toCall, pot, spot, holeCards, board } = ctx;
+  const eqPct   = (equity * 100).toFixed(0);
+  const oddsPct = (alpha  * 100).toFixed(0);
+  const edgePct = (Math.abs(edge) * 100).toFixed(0);
+  const spotName = spot || 'preflop';
+
+  // ── Pattern matching ───────────────────────────────────────────────────────
+
+  // "Why is that the best play?" / "why that" / "explain"
+  if (/why|best play|explain|right call|correct/.test(q)) {
+    if (verdict === 'fold') {
+      return `Fold is best here because your equity (~${eqPct}%) is below the ${oddsPct}% needed to break even on a call. You\'re paying more for your cards than they\'re worth — folding saves chips.`;
+    }
+    if (verdict === 'call') {
+      return `Call is best because your equity (~${eqPct}%) clears the ${oddsPct}% pot-odds threshold by ${edgePct} percentage points. You\'re getting a slightly better price than the risk warrants, so calling has positive expected value.`;
+    }
+    if (verdict === 'raise') {
+      return `Raise is best because your equity (~${eqPct}%) is ${edgePct}pp above the pot-odds requirement (${oddsPct}%). With that edge, building the pot with a raise extracts more value than a flat call.`;
+    }
+    if (verdict === 'bet') {
+      return `Bet is best because you\'re a slight favourite with ~${eqPct}% equity and no bet to face. Betting builds the pot and denies free cards to hands that might beat you later.`;
+    }
+    if (verdict === 'check') {
+      return `Check is best here — your equity (~${eqPct}%) is below 54%, meaning you\'re not a strong enough favourite to bet for value. A bet would only get called by hands that beat you.`;
+    }
+  }
+
+  // "What if I fold?" / "ev of folding"
+  if (/fold|give up|muck/.test(q)) {
+    if (verdict === 'fold') {
+      return `Folding is actually the recommendation here. Your equity (~${eqPct}%) is below the ${oddsPct}% pot odds required. Folding has 0 EV, while calling has negative EV of roughly ${(ev_call).toFixed(1)} chips — so you\'re saving money.`;
+    }
+    return `If you fold here, you walk away with 0 chips from this pot. Your equity is ~${eqPct}% and pot odds require ${oddsPct}% — so calling or raising has positive EV. Folding surrenders that edge.`;
+  }
+
+  // "What hands beat me?" / "what beats"
+  if (/beat|ahead|behind|what.*hand/.test(q)) {
+    const boardStr = board && board.length ? board.join(' ') : '(no board)';
+    if (equity >= 0.65) {
+      return `With ~${eqPct}% equity on the ${spotName} (board: ${boardStr}), you\'re ahead of most opponent hands. Only the top of their range — sets, two pair, strong draws — has you beat or close. Your hand is strong here.`;
+    }
+    if (equity >= 0.45) {
+      return `You\'re roughly even (~${eqPct}%) on the ${spotName}. The board (${boardStr}) still leaves room for opponents to hold better made hands or strong draws. Proceed carefully.`;
+    }
+    return `At ~${eqPct}% equity, more of your opponent\'s likely hands beat you than don\'t. On the ${spotName} (board: ${boardStr}), you\'re in a tough spot — hence the ${verdict} recommendation.`;
+  }
+
+  // "Pot odds" / "odds" / "how much do I need"
+  if (/pot.?odds|odds|how much equity|break.?even/.test(q)) {
+    if (toCall > 0) {
+      return `You must call ${toCall} chips into a pot of ${pot}. That\'s ${toCall} ÷ ${pot + toCall} = ${oddsPct}% pot odds. Your equity (~${eqPct}%) ${equity >= alpha ? 'exceeds' : 'falls short of'} that threshold by ${edgePct} percentage points.`;
+    }
+    return `You\'re not facing a bet right now — it\'s a check-or-bet spot. Your equity is ~${eqPct}%. The ${verdict} recommendation is based on whether you\'re a favourite to win the hand.`;
+  }
+
+  // "Raise" / "why not raise" / "should I raise"
+  if (/raise|re.?raise|3.?bet/.test(q)) {
+    if (verdict === 'raise') {
+      return `Raising is correct here. Your equity (~${eqPct}%) is far above the pot-odds requirement (${oddsPct}%), giving you a ${edgePct}pp edge. Raising builds the pot while you\'re ahead.`;
+    }
+    return `Raising isn\'t recommended here because your equity (~${eqPct}%) only gives you a ${edgePct}pp edge over the required ${oddsPct}%. A call or fold is more appropriate — raising risks more chips than the edge justifies.`;
+  }
+
+  // "Outs" / "drawing"
+  if (/out|draw|miss|improve/.test(q)) {
+    if (outs > 0) {
+      const riverChance = (outs * (board.length === 3 ? 4 : 2)).toFixed(0);
+      return `You have ${outs} outs to improve your hand. Using the Rule of ${board.length === 3 ? '4' : '2'}, that\'s roughly ${riverChance}% chance of hitting. Your total equity including the made-hand component is ~${eqPct}%.`;
+    }
+    return `Your hand doesn\'t have clear drawing outs right now — your ~${eqPct}% equity comes from your made hand, not draws.`;
+  }
+
+  // Generic fallback
+  return `On the ${spotName}: your equity is ~${eqPct}%, pot odds require ${oddsPct}%, giving you a ${edge >= 0 ? '+' : ''}${edgePct}pp edge. The recommended play is ${verdict.toUpperCase()}. Ask about "pot odds", "fold EV", "what beats me", or "why raise" for more detail.`;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. MOCK WEBSOCKET
 // ─────────────────────────────────────────────────────────────────────────────
 
 class MockWebSocket extends EventTarget {
@@ -1180,7 +1650,33 @@ class MockWebSocket extends EventTarget {
         this._receive('pong', { ts: Date.now() });
         break;
       case 'q':
-        // Coach question — not implemented, silently ignore
+      case 'ask_coach': {
+        const answer = generateCoachAnswer((data || {}).question || '', this._lastCoachCtx);
+        // Small delay so the "thinking…" message is visible briefly
+        setTimeout(() => this._receive('coach_answer', { answer }), 600);
+        break;
+      }
+      case 'start_drill': {
+        const lessonId = (data || {}).lesson_id;
+        const question = pickDrillQuestion(lessonId);
+        if (question) {
+          this._receive('drill_question', question);
+        } else {
+          this._receive('drill_question', {
+            question: `No questions found for lesson "${lessonId}". Check the lesson catalog.`,
+            answer_type: 'mc',
+            choices: ['OK'],
+          });
+        }
+        break;
+      }
+      case 'submit_drill_answer': {
+        const feedback = gradeDrillAnswer((data || {}).answer);
+        this._receive('drill_feedback', feedback);
+        break;
+      }
+      case 'set_active_lesson':
+        // Acknowledged — no server state needed client-side
         break;
       default:
         // Unknown message type — ignore silently

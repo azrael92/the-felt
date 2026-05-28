@@ -1496,6 +1496,19 @@ function onDrillFeedback(data) {
   $('drill-submit').hidden = true;
   $('drill-numeric').hidden = (data.kind ? false : true);
   if (!currentDrill) return;
+
+  // Update local session progress (server is a no-op in client-side build)
+  const lid = currentDrill.lesson_id;
+  if (!curriculum.progress[lid]) {
+    curriculum.progress[lid] = { state: 'active', attempts: 0, correct: 0, recent_accuracy: 0 };
+  }
+  const p = curriculum.progress[lid];
+  p.attempts++;
+  if (data.correct) p.correct++;
+  p.recent_accuracy = p.correct / p.attempts;
+  if (p.correct >= 3 && p.recent_accuracy >= 0.75) p.state = 'mastered';
+  renderLessonList();
+
   // Show next button
   const nxt = $('drill-next');
   nxt.hidden = false;
@@ -1503,8 +1516,6 @@ function onDrillFeedback(data) {
     const lesson = curriculum.modules.flatMap(m => m.lessons).find(l => l.id === currentDrill.lesson_id);
     if (lesson) startDrill(lesson);
   };
-  // Refresh progress (server has just persisted the attempt)
-  loadProgress();
 }
 
 function switchTab(name) {
