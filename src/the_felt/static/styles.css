@@ -2309,37 +2309,54 @@ main {
 
 /* =============================================================
    IFRAME EMBED MODE
-   When running inside magech.ai or any other iframe, force
-   two-column layout regardless of the host viewport width.
-   JS (engine-ws.js) adds the 'in-iframe' class to <html>.
+   JS (engine-ws.js) adds 'in-iframe' to <html> via window.self !== window.top.
+   Topbar always hidden. Two-column only when the iframe is wide enough.
    ============================================================= */
+
+/* Always: hide the topbar — saves ~75px in both desktop and mobile embeds */
 html.in-iframe .topbar { display: none !important; }
-html.in-iframe body { overflow: hidden; }
-html.in-iframe main {
-  height: 100vh !important;
-  /* 320px sidebar: narrow enough to leave the table room, wide enough to read */
-  grid-template-columns: minmax(0, 1fr) 320px !important;
+
+/* ── WIDE iframe: ≥ 640px — force two-column, no scroll ── */
+@media (min-width: 640px) {
+  html.in-iframe body { overflow: hidden; }
+  html.in-iframe main {
+    height: 100vh !important;
+    grid-template-columns: minmax(0, 1fr) 320px !important;
+  }
+  html.in-iframe .table-zone { padding: 8px 16px 6px !important; }
+  html.in-iframe .side-panel {
+    height: 100%;
+    padding: 8px 10px 6px 4px !important;
+    overflow: hidden !important;
+    gap: 6px !important;
+  }
+  /* Coach card: auto-height, capped so tabs always get space */
+  html.in-iframe .coach-card {
+    flex: 0 1 auto !important;
+    max-height: 44vh !important;
+    overflow-y: auto;
+  }
+  /* Tabs card: fill remaining side-panel height */
+  html.in-iframe .tabs-card {
+    flex: 1 1 0 !important;
+    min-height: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+  }
+  html.in-iframe .tier-card { flex: 0 0 auto; padding: 6px 10px !important; }
 }
-html.in-iframe .table-zone { padding: 8px 16px 6px !important; }
-html.in-iframe .side-panel {
-  /* fill the full column height; children flex-share it */
-  height: 100%;
-  padding: 8px 10px 6px 4px !important;
-  overflow: hidden !important;
-  gap: 6px !important;
+
+/* ── NARROW iframe: < 640px (mobile) — single column, scrollable ── */
+@media (max-width: 639px) {
+  html.in-iframe body { overflow: auto; }
+  html.in-iframe main {
+    height: auto !important;
+    grid-template-columns: 1fr !important;
+  }
+  html.in-iframe .side-panel {
+    padding: 8px !important;
+    height: auto !important;
+    max-height: none !important;
+    overflow: visible !important;
+  }
 }
-/* Coach card: auto-size to its content, capped so it can't crowd out tabs */
-html.in-iframe .coach-card {
-  flex: 0 1 auto !important;
-  max-height: 44vh !important;
-  overflow-y: auto;
-}
-/* Tabs card: take all remaining space, scroll internally */
-html.in-iframe .tabs-card {
-  flex: 1 1 0 !important;
-  min-height: 0 !important;
-  display: flex !important;
-  flex-direction: column !important;
-}
-/* Tier (Coach depth) card: fixed at bottom */
-html.in-iframe .tier-card { flex: 0 0 auto; padding: 6px 10px !important; }
