@@ -72,11 +72,11 @@ Each stage adds exactly one new control axis:
 
 By stage 8 the trainer has stopped handling anything. The student is flying solo against rule-based bots that play one of seven archetypes (Nit, TAG, LAG, Calling Station, Maniac, Whale, GTO Reg), tuned by a difficulty adapter that gets harder as the rating climbs and exploits the user's known leak history at the top band.
 
-## The "this isn't really math" critique that drove a rewrite
+## Showing the work, not just the answer
 
-A first cut of the app showed pot odds as a percentage in a side panel — "you need 28% equity to call" — and that was the entire teaching. The user (Rishi, testing it) flagged the obvious: that's just a number, not math. There's no formula visible, no derivation, no breakdown of which outs were actually being counted.
+A number without a derivation is not teaching — it's a lookup table. Displaying "you need 28% equity to call" without the formula, the substituted values, and the arithmetic is no better than a poker app that just says "call" or "fold." The student has nothing to take to the next hand.
 
-The fix was a step-by-step derivation panel that shows the formula symbolically, then with the actual numbers plugged in, then the result, then a one-line gloss of why it matters. For outs questions a wrong answer doesn't say "the correct answer is 11." It says: **you said 3, the answer is 11 — here are the 2 outs to Three of a Kind (6h 6d) plus the 9 outs to Two Pair (2s 2d 2c 5s 5h 5d Js Jh Jc).** The student sees exactly what they missed.
+Every piece of math in the coach panel is fully derived: formula → numbers plugged in → result → one-line gloss of what it means. For outs questions a wrong answer doesn't say "the correct answer is 11." It says: **you said 3, the answer is 11 — here are the 2 outs to Three of a Kind (6h 6d) plus the 9 outs to Two Pair (2s 2d 2c 5s 5h 5d Js Jh Jc).** The student sees exactly which cards they missed and why they count.
 
 Each stage also gets a multi-step walkthrough overlay the first time the user enters it: concept definition, formula, common values to memorize, and a worked example with rendered cards. Stage 2's flush-draw example shows 9♠ 8♠ on K♠ 7♥ 4♠ with the answer "13 spades − 4 visible = 9 outs" — same wording the in-hand math panel uses, so drill prose and live coach prose are identical.
 
